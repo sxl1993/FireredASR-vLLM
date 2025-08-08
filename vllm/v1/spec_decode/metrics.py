@@ -67,9 +67,9 @@ class SpecDecodingLogging:
         self.accepted_tokens_per_pos_lists.append(
             spec_decoding_stats.num_accepted_tokens_per_pos)
 
-    def log(self, log_fn=logger.info):
-        if not self.num_drafts:
-            return
+    # <abs> Zhiyan
+    #
+    def get_spec_decoding_stats(self):
         num_drafts = np.sum(self.num_drafts)
         num_draft_tokens = np.sum(self.num_draft_tokens)
         num_accepted_tokens = np.sum(self.num_accepted_tokens)
@@ -83,6 +83,36 @@ class SpecDecodingLogging:
         pos_matrix = np.array(self.accepted_tokens_per_pos_lists)
         acceptance_rates = np.sum(pos_matrix, axis=0) / num_drafts
         rates_str = ", ".join(f"{p:.3f}" for p in acceptance_rates)
+        return (
+            draft_acceptance_rate,
+            mean_acceptance_length,
+            num_accepted_tokens,
+            num_draft_tokens,
+            rates_str,
+        )
+
+    # </abs>
+
+    def log(self, log_fn=logger.info):
+        if not self.num_drafts:
+            return
+        # <abs> Zhiyan
+        #
+        # num_drafts = np.sum(self.num_drafts)
+        # num_draft_tokens = np.sum(self.num_draft_tokens)
+        # num_accepted_tokens = np.sum(self.num_accepted_tokens)
+
+        # draft_acceptance_rate = (num_accepted_tokens / num_draft_tokens *
+        #                          100 if num_draft_tokens > 0 else float("nan"))  # noqa: E501
+
+        # # Conventionally, mean acceptance length includes the bonus token
+        # mean_acceptance_length = 1 + (num_accepted_tokens / num_drafts)
+
+        # pos_matrix = np.array(self.accepted_tokens_per_pos_lists)
+        # acceptance_rates = np.sum(pos_matrix, axis=0) / num_drafts
+        # rates_str = ", ".join(f"{p:.3f}" for p in acceptance_rates)
+
+        # </abs>
 
         log_fn(
             "SpecDecoding metrics: "
@@ -91,13 +121,30 @@ class SpecDecodingLogging:
             "Accepted: %d tokens, "
             "Drafted: %d tokens, "
             "Per-position acceptance rate: %s",
-            draft_acceptance_rate,
-            mean_acceptance_length,
-            num_accepted_tokens,
-            num_draft_tokens,
-            rates_str,
+            # <abs> Zhiyan
+            #
+            # draft_acceptance_rate,
+            # mean_acceptance_length,
+            # num_accepted_tokens,
+            # num_draft_tokens,
+            # rates_str,
+            *self.get_spec_decoding_stats(),
+            # </abs>
         )
         self.reset()
+
+    # <abs> Zhiyan
+    #
+    async def log_on_zhiyan(self, zhiyan_reporter, session, engine_index):
+        if not self.num_drafts:
+            return
+        await zhiyan_reporter.report_spec_decoding_stats(
+            session,
+            engine_index,
+            *self.get_spec_decoding_stats(),
+        )
+
+    # </abs>
 
 
 class SpecDecodingProm:

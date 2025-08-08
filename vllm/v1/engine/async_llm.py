@@ -540,6 +540,14 @@ class AsyncLLM(EngineClient):
         if self.logger_manager:
             self.logger_manager.log()
 
+    # <abs> Zhiyan
+    #
+    async def do_log_stats_on_zhiyan(self, zhiyan_reporter):
+        if self.logger_manager:
+            await self.logger_manager.log_on_zhiyan(zhiyan_reporter)
+
+    # </abs>
+
     async def check_health(self) -> None:
         logger.debug("Called check_health.")
         if self.errored:

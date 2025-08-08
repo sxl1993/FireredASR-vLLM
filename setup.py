@@ -528,7 +528,7 @@ def get_gaudi_sw_version():
 
 def get_vllm_version() -> str:
 
-    # <abs>
+    # <abs> Versioning
     #
     # version = get_version(write_to="vllm/_version.py")
     version = os.getenv("VLLM_VERSION")
@@ -544,14 +544,14 @@ def get_vllm_version() -> str:
         else:
             cuda_version = str(get_nvcc_cuda_version())
             if cuda_version != MAIN_CUDA_VERSION:
-                # <abs>
+                # <abs> Versioning
                 #
                 # cuda_version_str = cuda_version.replace(".", "")[:3]
                 cuda_version.replace(".", "")[:3]
 
                 # skip this for source tarball, required for pypi
                 if "sdist" not in sys.argv:
-                    # <abs>
+                    # <abs> Versioning
                     #
                     # version += f"{sep}cu{cuda_version_str}"
                     version += f"{sep}abo"

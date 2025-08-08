@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -8,6 +9,7 @@ from typing import Callable, Optional, Union
 
 import numpy as np
 import prometheus_client
+from aiohttp import ClientSession
 
 from vllm.config import SupportsMetricsInfo, VllmConfig
 from vllm.logger import init_logger
@@ -46,6 +48,9 @@ class StatLoggerBase(ABC):
         ...
 
     def log(self):  # noqa
+        pass
+
+    async def log_on_zhiyan(self, zhiyan_reporter):  # noqa
         pass
 
 
@@ -121,6 +126,7 @@ class LoggingStatLogger(StatLoggerBase):
              self.last_prompt_throughput, self.last_generation_throughput)):
             # Avoid log noise on an idle production system
             log_fn = logger.debug
+
         self.last_generation_throughput = generation_throughput
         self.last_prompt_throughput = prompt_throughput
 
@@ -141,6 +147,41 @@ class LoggingStatLogger(StatLoggerBase):
             self.prefix_caching_metrics.hit_rate * 100,
         )
         self.spec_decoding_logging.log(log_fn=log_fn)
+
+    # <abs> Zhiyan
+    #
+    async def log_on_zhiyan(self, zhiyan_reporter):
+        now = time.monotonic()
+
+        prompt_throughput = self._get_throughput(self.num_prompt_tokens, now)
+        generation_throughput = self._get_throughput(
+            self.num_generation_tokens, now)
+
+        self._reset(now)
+
+        scheduler_stats = self.last_scheduler_stats
+        self.last_generation_throughput = generation_throughput
+        self.last_prompt_throughput = prompt_throughput
+
+        async with ClientSession() as session:
+            await zhiyan_reporter.report_stats(
+                session=session,
+                engine_index=self.engine_index,
+                prompt_throughput=prompt_throughput,
+                generation_throughput=generation_throughput,
+                num_running_reqs=scheduler_stats.num_running_reqs,
+                num_waiting_reqs=scheduler_stats.num_waiting_reqs,
+                kv_cache_usage=scheduler_stats.kv_cache_usage * 100,
+                prefix_cache_hit_rate=(self.prefix_caching_metrics.hit_rate *
+                                       100),
+            )
+            await self.spec_decoding_logging.log_on_zhiyan(
+                zhiyan_reporter=zhiyan_reporter,
+                session=session,
+                engine_index=self.engine_index,
+            )
+
+    # </abs>
 
     def log_engine_initialized(self):
         if self.vllm_config.cache_config.num_gpu_blocks:
@@ -653,9 +694,14 @@ class StatLoggerManager:
 
         # engine_idx: StatLogger
         self.per_engine_logger_dict: dict[int, list[StatLoggerBase]] = {}
+        # <abs> Zhiyan
+        self.per_engine_zhiyan_logger_dict: dict[int,
+                                                 list[StatLoggerBase]] = {}
         prometheus_factory = PrometheusStatLogger
         for engine_idx in self.engine_idxs:
             loggers: list[StatLoggerBase] = []
+            # <abs> Zhiyan
+            zhiyan_loggers: list[StatLoggerBase] = []
             for logger_factory in factories:
                 # If we get a custom prometheus logger, use that
                 # instead. This is typically used for the ray case.
@@ -665,7 +711,11 @@ class StatLoggerManager:
                     continue
                 loggers.append(logger_factory(vllm_config,
                                               engine_idx))  # type: ignore
+                # <abs> Zhiyan
+                zhiyan_loggers.append(logger_factory(
+                    vllm_config, engine_idx))  # type: ignore
             self.per_engine_logger_dict[engine_idx] = loggers
+            self.per_engine_zhiyan_logger_dict[engine_idx] = zhiyan_loggers
 
         # For Prometheus, need to share the metrics between EngineCores.
         # Each EngineCore's metrics are expressed as a unique label.
@@ -680,7 +730,14 @@ class StatLoggerManager:
         if engine_idx is None:
             engine_idx = 0
 
-        per_engine_loggers = self.per_engine_logger_dict[engine_idx]
+        # <abs> Zhiyan
+        #
+        # per_engine_loggers = self.per_engine_logger_dict[engine_idx]
+        per_engine_loggers = (
+            *self.per_engine_logger_dict[engine_idx],
+            *self.per_engine_zhiyan_logger_dict[engine_idx],
+        )
+        # </abs>
         for logger in per_engine_loggers:
             logger.record(scheduler_stats, iteration_stats, engine_idx)
 
@@ -691,6 +748,19 @@ class StatLoggerManager:
         for per_engine_loggers in self.per_engine_logger_dict.values():
             for logger in per_engine_loggers:
                 logger.log()
+
+    # <abs> Zhiyan
+    #
+    async def log_on_zhiyan(self, zhiyan_reporter):
+        loggers = []
+        for per_engine_zhiyan_loggers in (
+                self.per_engine_zhiyan_logger_dict.values()):
+            for logger in per_engine_zhiyan_loggers:
+                loggers.append(logger)
+        await asyncio.gather(
+            *[logger.log_on_zhiyan(zhiyan_reporter) for logger in loggers])
+
+    # </abs>
 
     def log_engine_initialized(self):
         self.prometheus_logger.log_engine_initialized()
