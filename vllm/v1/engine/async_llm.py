@@ -542,9 +542,12 @@ class AsyncLLM(EngineClient):
 
     # <abs> Zhiyan
     #
-    async def do_log_stats_on_zhiyan(self, zhiyan_reporter):
+    async def do_log_stats_on_zhiyan(self, zhiyan_reporter, session):
         if self.logger_manager:
-            await self.logger_manager.log_on_zhiyan(zhiyan_reporter)
+            await self.logger_manager.log_on_zhiyan(
+                zhiyan_reporter=zhiyan_reporter,
+                session=session,
+            )
 
     # </abs>
 

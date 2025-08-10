@@ -9,7 +9,6 @@ from typing import Callable, Optional, Union
 
 import numpy as np
 import prometheus_client
-from aiohttp import ClientSession
 
 from vllm.config import SupportsMetricsInfo, VllmConfig
 from vllm.logger import init_logger
@@ -50,7 +49,7 @@ class StatLoggerBase(ABC):
     def log(self):  # noqa
         pass
 
-    async def log_on_zhiyan(self, zhiyan_reporter):  # noqa
+    async def log_on_zhiyan(self, zhiyan_reporter, session):  # noqa
         pass
 
 
@@ -150,7 +149,7 @@ class LoggingStatLogger(StatLoggerBase):
 
     # <abs> Zhiyan
     #
-    async def log_on_zhiyan(self, zhiyan_reporter):
+    async def log_on_zhiyan(self, zhiyan_reporter, session):
         now = time.monotonic()
 
         prompt_throughput = self._get_throughput(self.num_prompt_tokens, now)
@@ -163,23 +162,21 @@ class LoggingStatLogger(StatLoggerBase):
         self.last_generation_throughput = generation_throughput
         self.last_prompt_throughput = prompt_throughput
 
-        async with ClientSession() as session:
-            await zhiyan_reporter.report_stats(
-                session=session,
-                engine_index=self.engine_index,
-                prompt_throughput=prompt_throughput,
-                generation_throughput=generation_throughput,
-                num_running_reqs=scheduler_stats.num_running_reqs,
-                num_waiting_reqs=scheduler_stats.num_waiting_reqs,
-                kv_cache_usage=scheduler_stats.kv_cache_usage * 100,
-                prefix_cache_hit_rate=(self.prefix_caching_metrics.hit_rate *
-                                       100),
-            )
-            await self.spec_decoding_logging.log_on_zhiyan(
-                zhiyan_reporter=zhiyan_reporter,
-                session=session,
-                engine_index=self.engine_index,
-            )
+        await zhiyan_reporter.report_stats(
+            session=session,
+            engine_index=self.engine_index,
+            prompt_throughput=prompt_throughput,
+            generation_throughput=generation_throughput,
+            num_running_reqs=scheduler_stats.num_running_reqs,
+            num_waiting_reqs=scheduler_stats.num_waiting_reqs,
+            kv_cache_usage=scheduler_stats.kv_cache_usage * 100,
+            prefix_cache_hit_rate=(self.prefix_caching_metrics.hit_rate * 100),
+        )
+        await self.spec_decoding_logging.log_on_zhiyan(
+            zhiyan_reporter=zhiyan_reporter,
+            session=session,
+            engine_index=self.engine_index,
+        )
 
     # </abs>
 
@@ -751,14 +748,16 @@ class StatLoggerManager:
 
     # <abs> Zhiyan
     #
-    async def log_on_zhiyan(self, zhiyan_reporter):
-        loggers = []
+    async def log_on_zhiyan(self, zhiyan_reporter, session):
+        loggers: list[StatLoggerBase] = []
         for per_engine_zhiyan_loggers in (
                 self.per_engine_zhiyan_logger_dict.values()):
             for logger in per_engine_zhiyan_loggers:
                 loggers.append(logger)
-        await asyncio.gather(
-            *[logger.log_on_zhiyan(zhiyan_reporter) for logger in loggers])
+        await asyncio.gather(*[
+            logger.log_on_zhiyan(zhiyan_reporter=zhiyan_reporter,
+                                 session=session) for logger in loggers
+        ])
 
     # </abs>
 
