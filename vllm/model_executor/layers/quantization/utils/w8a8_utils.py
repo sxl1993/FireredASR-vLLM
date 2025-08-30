@@ -6,6 +6,7 @@ from typing import Callable, Optional, Union
 import torch
 # <abs> TensorRT-LLM FP8 Support
 from loguru import logger
+from packaging import version
 
 from vllm import _custom_ops as ops
 from vllm import envs
@@ -61,8 +62,8 @@ TORCH_DEVICE_IDENTITY = None
 # torch._scaled_mm rowwise feature.
 # The condition is determined once as the operations
 # are time consuming.
-USE_ROWWISE_TORCH_SCALED_MM = (current_platform.is_rocm()
-                               and torch.__version__[0:3] >= "2.7"
+USE_ROWWISE_TORCH_SCALED_MM = (current_platform.is_rocm() and version.parse(
+    torch.__version__) >= version.parse("2.7")
                                and current_platform.has_device_capability(94))
 
 
@@ -160,6 +161,9 @@ def requantize_with_max_scale(
     if unfused_module_in_checkpoint:
         start = 0
         for idx, logical_width in enumerate(logical_widths):
+            # Skip any component with zero width.
+            if logical_width == 0:
+                continue
             end = start + logical_width
             weight_dq = per_tensor_dequantize(weight[start:end, :],
                                               weight_scale[idx])
