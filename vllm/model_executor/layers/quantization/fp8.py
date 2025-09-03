@@ -275,14 +275,14 @@ class Fp8LinearMethod(LinearMethodBase):
 
         # In the case when `block_quant` has not been specified, check the
         # environment variable.
-        if weight_block_size := os.getenv("VLLM_FP8_BLOCK_QUANT", None):
+        if weight_block_size := os.getenv("VLLM_FP8_WEIGHT_BLOCK_SIZE", None):
             self.block_quant = True
             self.quant_config.weight_block_size = [
                 int(bs) for bs in weight_block_size.split(",")
             ]
             logger.warning(
                 "Using as weight_block_size={weight_block_size} (from "
-                "VLLM_FP8_BLOCK_QUANT).",
+                "VLLM_FP8_WEIGHT_BLOCK_SIZE).",
                 weight_block_size=self.quant_config.weight_block_size,
             )
 
@@ -329,6 +329,9 @@ class Fp8LinearMethod(LinearMethodBase):
         layer.orig_dtype = params_dtype
         layer.weight_block_size = None
 
+        # <abs> FP8 Block Alignment
+        from loguru import logger
+
         if self.block_quant:
             tp_size = get_tensor_model_parallel_world_size()
             assert self.quant_config.weight_block_size is not None
@@ -341,7 +344,9 @@ class Fp8LinearMethod(LinearMethodBase):
             if (tp_size > 1
                     and input_size // input_size_per_partition == tp_size
                     and input_size_per_partition % block_k != 0):
-                raise ValueError(
+                # <abs> FP8 Block Alignment
+                # raise ValueError(
+                logger.warning(
                     f"Weight input_size_per_partition = "
                     f"{input_size_per_partition} is not divisible by "
                     f"weight quantization block_k = {block_k}.")
@@ -357,7 +362,9 @@ class Fp8LinearMethod(LinearMethodBase):
                     sizes_to_check = output_partition_sizes[:-1]
                 for output_partition_size in sizes_to_check:
                     if output_partition_size % block_n != 0:
-                        raise ValueError(
+                        # <abs> FP8 Block Alignment
+                        # raise ValueError(
+                        logger.warning(
                             f"Weight output_partition_size = "
                             f"{output_partition_size} is not divisible by "
                             f"weight quantization block_n = {block_n}.")
@@ -456,7 +463,7 @@ class Fp8LinearMethod(LinearMethodBase):
 
                 param_value_orig_shape = param_value.shape
                 if rows % block_size_m != 0 or cols % block_size_n != 0:
-                    param_value = torch.nn.functional.pad(
+                    param_value = F.pad(
                         input=param_value,
                         pad=(
                             0,
@@ -649,6 +656,9 @@ class Fp8LinearMethod(LinearMethodBase):
                     layer, "weight_scale_inv") else layer.weight_scale.data,
                 block_sz,
             )
+
+        # <abs> TensorRT-LLM FP8 Support
+        torch.cuda.empty_cache()
 
     def apply(self,
               layer: torch.nn.Module,
