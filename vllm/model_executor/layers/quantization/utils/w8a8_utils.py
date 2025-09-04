@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+# <abs> TensorRT-LLM FP8 Support
+from importlib.metadata import version as importlib_version
 from typing import Callable, Optional, Union
 
 import torch
@@ -16,41 +18,17 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     GroupShape)
 from vllm.platforms import current_platform
 
+logger.warning("Checking the availability of TensorRT-LLM ...")
 # <abs> TensorRT-LLM FP8 Support
 #
 try:
-    # Import xgrammar first to prevent TensorRT-LLM affecting the library
-    # linkage:
-    #
-    # *** Process received signal ***
-    # Signal: Segmentation fault (11)
-    # Signal code: Address not mapped (1)
-    # Failing at address: (nil)
-    # ...
-    # [ 2] /usr/local/lib/python3.12/dist-packages/tensorrt_llm/libs/libtensorrt_llm.so(_ZN8xgrammar19JSONSchemaConverter13AddBasicRulesEv+0x149d)[0x7f14e3feda9d]  # noqa: E501
-    import xgrammar  # isort: skip # noqa
-    import tensorrt_llm  # noqa
-
-    logger.warning("TensorRT-LLM is available!")
+    trtllm_version = importlib_version("tensorrt_llm")
+    logger.warning("TensorRT-LLM {trtllm_version} is available!",
+                   trtllm_version=trtllm_version)
     IS_TRTLLM_AVAILABLE = True
-except ImportError:
-    logger.warning("TensorRT-LLM is not installed!")
+except Exception:
+    logger.exception("TensorRT-LLM is not installed!")
     IS_TRTLLM_AVAILABLE = False
-
-if IS_TRTLLM_AVAILABLE:
-    # Add a fake kernel for `quantize_e4m3_per_tensor``, so as to support
-    # `torch.compile`.
-    logger.warning(
-        "Registering a fake kernel for "
-        "`tensorrt_llm::quantize_e4m3_per_tensor` to support "
-        "`torch.compile` ...", )
-
-    @torch.library.register_fake("tensorrt_llm::quantize_e4m3_per_tensor")
-    def _(input: torch.Tensor):
-        return torch.empty_like(input).to(
-            torch.float8_e4m3fn), input.new_empty(
-                [1 for _ in range(input.dim())])
-
 
 # </abs>
 

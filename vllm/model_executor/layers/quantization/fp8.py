@@ -224,6 +224,9 @@ class Fp8Config(QuantizationConfig):
         return None
 
 
+_IS_TRTLLM_RUNTIME_INITIALIZED = False
+
+
 class Fp8LinearMethod(LinearMethodBase):
     """Linear method for FP8.
     Supports loading FP8 checkpoints with static weight scale and
@@ -270,9 +273,35 @@ class Fp8LinearMethod(LinearMethodBase):
         #     # Default to using per_token quantization if cutlass is supported
         #     use_per_token_if_dynamic=cutlass_fp8_supported())
         import os
+        import site
+        from pathlib import Path
+        from pprint import pformat
 
         from loguru import logger
 
+        global _IS_TRTLLM_RUNTIME_INITIALIZED
+        if not _IS_TRTLLM_RUNTIME_INITIALIZED:
+            logger.warning(
+                "Since the tensorrt_llm import is error-prone, and often, "
+                "errors such as OpenMPI initialization failure directly "
+                "terminates the program rather than throwing a failure, log "
+                "the environment variables in case when an error occurs:\n"
+                "{os_environ}",
+                os_environ=pformat(dict(os.environ)))
+
+            for site_pkg in site.getsitepackages():
+                if libth_common := (Path(site_pkg) / "tensorrt_llm" / "libs" /
+                                    "libth_common.so"):
+                    if not libth_common.exists():
+                        continue
+                    logger.info("Loading libth_common.so from TensorRT-LLM!")
+                    torch.classes.load_library(str(libth_common))
+
+            from vllm.model_executor.layers.quantization.utils.trtllm_register_fake import (  # noqa
+                _)
+            _IS_TRTLLM_RUNTIME_INITIALIZED = True
+
+        # isort: on
         # In the case when `block_quant` has not been specified, check the
         # environment variable.
         if weight_block_size := os.getenv("VLLM_FP8_WEIGHT_BLOCK_SIZE", None):
