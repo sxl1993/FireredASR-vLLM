@@ -2,13 +2,22 @@ regex # Replace re for higher-performance regex matching
 cachetools
 psutil
 sentencepiece  # Required for LLaMA tokenizer.
-numpy
+
+# <abs> Restrict the numpy version to be 1.x. Reference:
+# https://github.com/triton-inference-server/server/issues/7391
+numpy < 2
+
 requests >= 2.26.0
 tqdm
 blake3
 py-cpuinfo
-# <abs> Downgrade the requirement on transformers.
-transformers >= 4.53.3  # <abs> 4.55.0
+
+# <abs> Also, Restrict the transformers version to be < 4.54.0. The reason is
+# that starting from v4.54.0, the model is loaded as a fast processor by
+# default, even if the model checkpoint was saved with a slow processor. This is
+# a breaking change and may produce slightly different outputs.
+transformers == 4.53.3  # 4.55.0
+
 tokenizers >= 0.21.1  # Required for fast incremental detokenization.
 protobuf # Required by LlamaTokenizer.
 fastapi[standard] >= 0.115.0 # Required by FastAPI's form models in the OpenAI API server's audio transcriptions endpoint.
