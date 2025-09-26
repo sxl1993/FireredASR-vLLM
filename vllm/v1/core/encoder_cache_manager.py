@@ -19,22 +19,29 @@ logger = init_logger(__name__)
 
 # <abs> Encoder Cache Sharing by MM Hash
 #
-# Note that the same multimodal item may be shared by multiple requests.
-# Before the hit_cnt reaches VLLM_EXPECT_ENCODER_CACHE_HITS (or request ended)
-# EncoderCache keeps retaining the items for future reuse at the cost of Memory
+# Note that the same multi-modal item may be shared by multiple requests.
+# Before the hit_cnt reaches `VLLM_EXPECT_ENCODER_CACHE_HITS` (or request
+# ended), the encoder cache keeps retaining the items for future reuse at the
+# cost of extra memory consumption.
 #
 # To decide the value, for example, we know in advance that each image will be
-# used for Chinese and English prompts, so we expect each EncoderCache item to
-# be hit twice, that is, VLLM_EXPECT_ENCODER_CACHE_HITS=2
-EXPECT_ENCODER_CACHE_HITS = int(
+# used for Chinese and English prompts, so we expect each encoder cache item to
+# be hit twice, i.e., `VLLM_EXPECT_ENCODER_CACHE_HITS=2`.
+VLLM_EXPECT_ENCODER_CACHE_HITS = int(
     os.getenv("VLLM_EXPECT_ENCODER_CACHE_HITS", "1"))
-if EXPECT_ENCODER_CACHE_HITS != 1:
-    if EXPECT_ENCODER_CACHE_HITS <= 0:
-        EXPECT_ENCODER_CACHE_HITS = 1
+if VLLM_EXPECT_ENCODER_CACHE_HITS != 1:
+    if VLLM_EXPECT_ENCODER_CACHE_HITS <= 0:
+        VLLM_EXPECT_ENCODER_CACHE_HITS = 1
     else:
         logger.warning(
-            "Enabled Expect Encoder Cache with hit count %d !"
-            "Be careful of CUDA Memory usage!", EXPECT_ENCODER_CACHE_HITS)
+            "Enabling encoder cache with expected hit count=%d! Note that upon "
+            "enabling this feature, the encoder cache keeps retaining the "
+            "multi-modal items for future resue at the cost of extra memory "
+            "consumption.", VLLM_EXPECT_ENCODER_CACHE_HITS)
+else:
+    logger.warning("Using the default encoder cache!")
+
+# </abs>
 
 
 class EncoderCacheManager:
@@ -80,26 +87,28 @@ class EncoderCacheManager:
 
         # <abs> Encoder Cache Sharing by MM Hash
         #
-        # Difference of "ref_cnt" and "hit_cnt":
-        # "ref_cnt" Increase when allocate for certain mm input.
-        #           Decrease when calling free of certain mm input.
-        #           It means the Sharing Count between running requests.
-        # "hit_cnt" Increase when allocate for certain mm input.
-        #           Never decrease.
-        #           But clear when equals to EXPECT_ENCODER_CACHE_HITS
-        #                          or when requests exit by "forcing" to clear
+        # Difference of `ref_cnt` and `hit_cnt`:
+        #
+        # - `ref_cnt` is increased when allocating for certain mm inputs, and
+        #   decreased when freeing. It means the **sharing count** between
+        #   running requests.
+        # - `hit_cnt` is increased when allocating for certain mm inputs, but
+        #   never decreased. However, this counter is cleared upon reaching
+        #   `VLLM_EXPECT_ENCODER_CACHE_HITS` or being forced to be cleared.
+        #
         # mm_hash -> cached ref_cnt
         self.mm_hash_ref: dict[str, int] = defaultdict(int)
         # mm_hash -> cached hit_cnt
         self.mm_hash_hit: dict[str, int] = defaultdict(int)
+        # </abs>
 
         # <abs> Encoder Cache Sharing by MM Hash
         #
-        # list of [req_id, input_id]
         # self.freed: list[tuple[str, int]] = []
         #
-        # When hit_cnt being cleared, put its mm_hash into freed
-        #   which will be sent to model_runner to clear the cache.
+        # Originally, `freed` refers to a list of [req_id, input_id]. When
+        # `hit_cnt` is cleared, put its mm_hash into `freed`, which will be sent
+        # to model_runner to clear the cache.
         self.freed: list[str] = []
 
     def has_cache(self, request: Request, input_id: int) -> bool:
@@ -117,7 +126,6 @@ class EncoderCacheManager:
         # <abs> Encoder Cache Sharing by MM Hash
         #
         # return req_id in self.cached and input_id in self.cached[req_id]
-        #
         return (req_id in self.cached and input_id in self.cached[req_id]
                 ) or self.mm_hash_hit[request.mm_hashes[input_id]] > 0
 
@@ -159,11 +167,11 @@ class EncoderCacheManager:
         # <abs> Encoder Cache Sharing by MM Hash
         #
         # self.num_free_slots -= request.get_num_encoder_tokens(input_id)
-        #
         if self.mm_hash_ref[request.mm_hashes[input_id]] == 0:
             self.num_free_slots -= request.get_num_encoder_tokens(input_id)
         self.mm_hash_ref[request.mm_hashes[input_id]] += 1
         self.mm_hash_hit[request.mm_hashes[input_id]] += 1
+        # </abs>
 
     def get_cached_input_ids(self, request: Request) -> set[int]:
         """Get all cached multimodal input IDs for a request.
@@ -186,8 +194,9 @@ class EncoderCacheManager:
         #
         # ) -> None:
         #
-        # "force" to free all cache when requests are exiting
-        force: bool = False
+        # "force" to free all associated cache items when the request is
+        # exiting.
+        force: bool = False,
     ) -> None:
         """Free cache space for a single multimodal input's encoder output.
 
@@ -213,14 +222,14 @@ class EncoderCacheManager:
         #
         # self.num_free_slots += request.get_num_encoder_tokens(input_id)
         # self.freed.append((req_id, input_id))
-        #
         self.mm_hash_ref[request.mm_hashes[input_id]] -= 1
         if self.mm_hash_ref[request.mm_hashes[input_id]] == 0:
             self.num_free_slots += request.get_num_encoder_tokens(input_id)
         if force or self.mm_hash_hit[
-                request.mm_hashes[input_id]] == EXPECT_ENCODER_CACHE_HITS:
+                request.mm_hashes[input_id]] == VLLM_EXPECT_ENCODER_CACHE_HITS:
             self.freed.append(request.mm_hashes[input_id])
             del self.mm_hash_hit[request.mm_hashes[input_id]]
+        # </abs>
 
     def free(self, request: Request) -> None:
         """Free all cached encoder outputs for a request.
@@ -235,15 +244,11 @@ class EncoderCacheManager:
         for input_id in input_ids:
 
             # <abs> Encoder Cache Sharing by MM Hash
-            #
             # self.free_encoder_input(request, input_id)
-            #
-            self.free_encoder_input(request, input_id, True)
+            self.free_encoder_input(request, input_id, force=True)
 
     # <abs> Encoder Cache Sharing by MM Hash
-    #
     # def get_freed_ids(self) -> list[tuple[str, int]]:
-    #
     def get_freed_ids(self) -> list[str]:
         """Get and clear the list of recently freed encoder cache entries.
 

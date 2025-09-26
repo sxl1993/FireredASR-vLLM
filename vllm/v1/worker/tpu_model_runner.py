@@ -208,8 +208,14 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # Lazy initialization
         self.model: nn.Module  # Set after load_model
         self.kv_caches: list[torch.Tensor] = []
+
+        # <abs> Encoder Cache Sharing by MM Hash
+        #
         # req_id -> (input_id -> encoder_output)
-        self.encoder_cache: dict[str, dict[int, torch.Tensor]] = {}
+        # self.encoder_cache: dict[str, dict[int, torch.Tensor]] = {}
+        #
+        # We use mm_hash -> tensor instead
+        self.encoder_cache: dict[str, torch.Tensor] = {}
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
@@ -344,7 +350,10 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # Remove finished requests from the cached states.
         for req_id in scheduler_output.finished_req_ids:
             self.requests.pop(req_id, None)
-            self.encoder_cache.pop(req_id, None)
+
+            # <abs> Encoder Cache Sharing by MM Hash
+            #
+            # self.encoder_cache.pop(req_id, None)
 
         # Remove the finished requests from the persistent batch.
         # NOTE(woosuk): There could be an edge case where finished_req_ids and
@@ -359,12 +368,18 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 removed_req_indices.append(req_index)
 
         # Free the cached encoder outputs.
-        for req_id, input_id in scheduler_output.free_encoder_input_ids:
-            encoder_outputs = self.encoder_cache.get(req_id)
-            if encoder_outputs is not None:
-                encoder_outputs.pop(input_id, None)
-                if not encoder_outputs:
-                    self.encoder_cache.pop(req_id, None)
+
+        # <abs> Encoder Cache Sharing by MM Hash
+        #
+        # for req_id, input_id in scheduler_output.free_encoder_input_ids:
+        #     encoder_outputs = self.encoder_cache.get(req_id)
+        #     if encoder_outputs is not None:
+        #         encoder_outputs.pop(input_id, None)
+        #         if not encoder_outputs:
+        #             self.encoder_cache.pop(req_id, None)
+        for mm_hash in scheduler_output.free_encoder_input_ids:
+            self.encoder_cache.pop(mm_hash, None)
+        # </abs>
 
         # Remove the unscheduled requests from the persistent batch.
         # NOTE(woosuk): The unscheduled requests are either preempted requests
@@ -395,6 +410,10 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 req_id=req_id,
                 prompt_token_ids=new_req_data.prompt_token_ids,
                 mm_kwargs=new_req_data.mm_kwargs,
+
+                # <abs> Encoder Cache Sharing by MM Hash
+                #
+                mm_hashes=new_req_data.mm_hashes,
                 mm_positions=new_req_data.mm_positions,
                 sampling_params=sampling_params,
                 pooling_params=None,
@@ -843,14 +862,25 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
 
         # Batch the multi-modal inputs.
         mm_kwargs = list[MultiModalKwargsItem]()
-        req_ids_pos = list[tuple[str, int, PlaceholderRange]]()
-        for req_id, encoder_input_ids in scheduled_encoder_inputs.items():
-            req_state = self.requests[req_id]
 
-            for mm_input_id in encoder_input_ids:
+        # <abs> Encoder Cache Sharing by MM Hash
+        #
+        # req_ids_pos = list[tuple[str, int, PlaceholderRange]]()
+        # for req_id, encoder_input_ids in scheduled_encoder_inputs.items():
+        #     req_state = self.requests[req_id]
+        #     for mm_input_id in encoder_input_ids:
+        #         req_ids_pos.append(
+        #            (req_id, mm_input_id, req_state.mm_positions[mm_input_id]))
+        #
+        req_ids_pos_hash = list[tuple[str, int, PlaceholderRange, str]]()
+        for req_id, encoder_input_ids_hash in scheduled_encoder_inputs.items():
+            req_state = self.requests[req_id]
+            for (mm_input_id, mm_hash) in encoder_input_ids_hash:
                 mm_kwargs.append(req_state.mm_kwargs[mm_input_id])
-                req_ids_pos.append(
-                    (req_id, mm_input_id, req_state.mm_positions[mm_input_id]))
+                req_ids_pos_hash.append(
+                    (req_id, mm_input_id, req_state.mm_positions[mm_input_id],
+                     mm_hash))
+        # </abs>
 
         # Batch mm inputs as much as we can: if a request in the batch has
         # multiple modalities or a different modality than the previous one,
@@ -890,18 +920,28 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     encoder_outputs.append(output)
 
         # Cache the encoder outputs.
-        # NOTE (NickLucche) here we diverge from logic in other runners, as we
-        # assume to only have whole mm items to process. Hence we avoid the
-        # intrinsic dynamism that `scatter_mm_placeholders` introduces.
-        for (req_id, input_id, pos_info), output in zip(
-                req_ids_pos,
+
+        # <abs> Encoder Cache Sharing by MM Hash
+        #
+        # # NOTE (NickLucche) here we diverge from logic in other runners, as we
+        # # assume to only have whole mm items to process. Hence we avoid the
+        # # intrinsic dynamism that `scatter_mm_placeholders` introduces.
+        # for (req_id, input_id, pos_info), output in zip(
+        #         req_ids_pos,
+        #         encoder_outputs,
+        # ):
+        #     if req_id not in self.encoder_cache:
+        #         self.encoder_cache[req_id] = {}
+        #     assert pos_info.is_embed is None, "Expected all positions to be"\
+        #         " contiguous and embeddings."
+        #     self.encoder_cache[req_id][input_id] = output
+        for (req_id, input_id, pos_info, mm_hash), output in zip(
+                req_ids_pos_hash,
                 encoder_outputs,
         ):
-            if req_id not in self.encoder_cache:
-                self.encoder_cache[req_id] = {}
-            assert pos_info.is_embed is None, "Expected all positions to be"\
-                " contiguous and embeddings."
-            self.encoder_cache[req_id][input_id] = output
+            # Calling of scatter_mm_placeholders is delayed.
+            self.encoder_cache[mm_hash] = output
+        # </abs>
 
     def _gather_mm_embeddings(
         self,
@@ -934,11 +974,17 @@ class TPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     # in the decoder's KV cache.
                     continue
 
-                assert req_id in self.encoder_cache
-                assert i in self.encoder_cache[req_id]
+                # <abs> Encoder Cache Sharing by MM Hash
+                #
+                # assert req_id in self.encoder_cache
+                # assert i in self.encoder_cache[req_id]
+                # encoder_output = self.encoder_cache[req_id][i]
+                assert req_state.mm_hashes[i] in self.encoder_cache
+                encoder_output = self.encoder_cache[req_state.mm_hashes[i]]
+                # </abs>
+
                 assert pos_info.is_embed is None, "Expected all positions to"\
                 " be contiguous and embeddings."
-                encoder_output = self.encoder_cache[req_id][i]
                 mm_embeds.append(encoder_output)
         return mm_embeds
 

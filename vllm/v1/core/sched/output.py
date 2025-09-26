@@ -139,7 +139,7 @@ class SchedulerOutput:
     #
     # scheduled_encoder_inputs: dict[str, list[int]]
     #
-    # req_id -> encoder input indices with mm_hash that need processing.
+    # req_id -> [encoder input index, mm_hash]
     scheduled_encoder_inputs: dict[str, list[tuple[int, str]]]
 
     # Number of common prefix blocks for all requests in each KV cache group.
@@ -156,7 +156,8 @@ class SchedulerOutput:
     # <abs> Encoder Cache Sharing by MM Hash
     #
     # free_encoder_input_ids: list[tuple[str, int]]
-    # list of (mm_hash) tuples.
+    #
+    # List of mm_hash tuples
     #
     free_encoder_input_ids: list[str]
 

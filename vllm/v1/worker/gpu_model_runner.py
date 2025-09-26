@@ -177,7 +177,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
 
         # <abs> Encoder Cache Sharing by MM Hash
         #
-        # req_id -> (input_id -> encoder_output)
+        # # req_id -> (input_id -> encoder_output)
         # self.encoder_cache: dict[str, dict[int, torch.Tensor]] = {}
         #
         # We use mm_hash -> tensor instead
@@ -440,7 +440,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             # <abs> Encoder Cache Sharing by MM Hash
             #
             # self.encoder_cache.pop(req_id, None)
-            #
 
         # Remove the finished requests from the persistent batch.
         # NOTE(woosuk): There could be an edge case where finished_req_ids and
@@ -461,9 +460,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         #         encoder_outputs.pop(input_id, None)
         #         if not encoder_outputs:
         #             self.encoder_cache.pop(req_id, None)
-        #
         for mm_hash in scheduler_output.free_encoder_input_ids:
             self.encoder_cache.pop(mm_hash, None)
+        # </abs>
 
         # Remove the unscheduled requests from the persistent batch.
         # NOTE(woosuk): The unscheduled requests are either preempted requests
@@ -1200,6 +1199,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 req_ids_pos_hash.append(
                     (req_id, mm_input_id, req_state.mm_positions[mm_input_id],
                      mm_hash))
+        # </abs>
 
         # Batch mm inputs as much as we can: if a request in the batch has
         # multiple modalities or a different modality than the previous one,
@@ -1238,22 +1238,21 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         #
         # for (req_id, input_id, pos_info), output in zip(
         #         req_ids_pos,
-        #
+        #         encoder_outputs,
+        # ):
+        #     if req_id not in self.encoder_cache:
+        #         self.encoder_cache[req_id] = {}
+        #     self.encoder_cache[req_id][input_id] = scatter_mm_placeholders(
+        #         output,
+        #         is_embed=pos_info.is_embed,
+        #     )
         for (req_id, input_id, pos_info, mm_hash), output in zip(
                 req_ids_pos_hash,
                 encoder_outputs,
         ):
-            # <abs> Encoder Cache Sharing by MM Hash
-            #
-            # if req_id not in self.encoder_cache:
-            #     self.encoder_cache[req_id] = {}
-            # self.encoder_cache[req_id][input_id] = scatter_mm_placeholders(
-            #     output,
-            #     is_embed=pos_info.is_embed,
-            # )
-            #
             # Calling of scatter_mm_placeholders is delayed.
             self.encoder_cache[mm_hash] = output
+        # </abs>
 
     def _gather_mm_embeddings(
         self,
@@ -1296,13 +1295,13 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 # assert req_id in self.encoder_cache
                 # assert i in self.encoder_cache[req_id]
                 # encoder_output = self.encoder_cache[req_id][i]
-                #
                 assert req_state.mm_hashes[i] in self.encoder_cache
                 encoder_output = self.encoder_cache[req_state.mm_hashes[i]]
                 encoder_output = scatter_mm_placeholders(
                     encoder_output,
                     is_embed=pos_info.is_embed,
                 )
+                # </abs>
 
                 if (is_embed := pos_info.is_embed) is not None:
                     is_embed = is_embed[start_idx:end_idx]
