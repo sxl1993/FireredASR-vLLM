@@ -841,6 +841,10 @@ class BaseInternVLMultiModalProcessor(BaseMultiModalProcessor[_I]):
         ]
 
 
+# <abs> InternVL Processor Fix
+INTERNVL_PROCESSOR_TEXT_MODEL_TYPE_LOGGED_ONCE = False
+
+
 class InternVLProcessingInfo(BaseInternVLProcessingInfo):
     """InternVL ProcessingInfo extended for video processing"""
 
@@ -853,10 +857,24 @@ class InternVLProcessingInfo(BaseInternVLProcessingInfo):
         return {**super().get_supported_mm_limits(), **video_limit}
 
     def get_video_token(self) -> Optional[str]:
+        # <abs> InternVL Processor Fix
+        from loguru import logger
+
         text_model_type = self.get_hf_config().get_text_config().model_type
-        if text_model_type == "qwen2":
-            return "<|video_pad|>"
-        return None
+
+        # <abs> InternVL Processor Fix
+        #
+        global INTERNVL_PROCESSOR_TEXT_MODEL_TYPE_LOGGED_ONCE
+        if not INTERNVL_PROCESSOR_TEXT_MODEL_TYPE_LOGGED_ONCE:
+            logger.warning(
+                "Forcing the model to support videos, regardless of its text "
+                "model type={text_model_type}!",
+                text_model_type=text_model_type,
+            )
+            INTERNVL_PROCESSOR_TEXT_MODEL_TYPE_LOGGED_ONCE = True
+        # </abs>
+
+        return "<|video_pad|>"
 
     def get_num_frames_with_most_features(
         self,

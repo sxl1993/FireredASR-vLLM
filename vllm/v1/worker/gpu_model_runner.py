@@ -1250,7 +1250,8 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 req_ids_pos_hash,
                 encoder_outputs,
         ):
-            # Calling of scatter_mm_placeholders is delayed.
+            # Calling of scatter_mm_placeholders is delayed, since we are only
+            # storing the embeddings here.
             self.encoder_cache[mm_hash] = output
         # </abs>
 
