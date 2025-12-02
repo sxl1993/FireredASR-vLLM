@@ -7,8 +7,6 @@ from typing import Any, Callable, Optional, Union
 
 from typing_extensions import TypeVar
 
-from vllm import LLM
-
 import vllm.envs as envs
 from vllm.config import ParallelConfig, VllmConfig
 from vllm.distributed import stateless_destroy_torch_distributed_process_group

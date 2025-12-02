@@ -7,23 +7,27 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM
 
-from fireredasr.models.fireredasr_aed import FireRedAsrAed
-from fireredasr.models.module.adapter import Adapter
-from fireredasr.tokenizer.llm_tokenizer import DEFAULT_SPEECH_TOKEN, IGNORE_TOKEN_ID
-from fireredasr.tokenizer.llm_tokenizer import LlmTokenizerWrapper
-from fireredasr.utils.param import count_model_parameters
+from .fireredasr_aed import FireRedAsrAed
+from .module.adapter import Adapter
+from ..tokenizer.llm_tokenizer import DEFAULT_SPEECH_TOKEN, IGNORE_TOKEN_ID
+from ..tokenizer.llm_tokenizer import LlmTokenizerWrapper
+from ..utils.param import count_model_parameters
 
 
 class FireRedAsrLlm(nn.Module):
     @classmethod
     def load_encoder(cls, model_path):
         assert os.path.exists(model_path)
-        package = torch.load(model_path, map_location=lambda storage, loc: storage)
+        # print(f">>>>>> loading encoder from {model_path}")
+        package = torch.load(model_path, map_location=lambda storage, loc: storage, weights_only=False)
         model = FireRedAsrAed.from_args(package["args"])
+        # print(f">>>>>> asr_encoder model args: {package['args']}")
+        # print(f">>>>>> asr_encoder model state dict: {package['model_state_dict'].keys()}")
         if "model_state_dict" in package:
             model.load_state_dict(package["model_state_dict"], strict=False)
         encoder = model.encoder
         encoder_dim = encoder.odim
+        
         return encoder, encoder_dim
 
     @classmethod
@@ -39,6 +43,9 @@ class FireRedAsrLlm(nn.Module):
                 param.requires_grad = False
             encoder.eval()
 
+
+        args.use_flash_attn = True
+        args.use_fp16 = True
         if args.use_flash_attn:
             attn_implementation = "flash_attention_2"
             if args.use_fp16:
@@ -59,6 +66,13 @@ class FireRedAsrLlm(nn.Module):
             torch_dtype=torch_dtype,
         )
         count_model_parameters(llm)
+
+        print(f"args.use_flash_attn: {args.use_flash_attn}")
+        print(f"args.use_fp16: {args.use_fp16}")
+        print(f"args.use_lora: {args.use_lora}")
+        print(f"args.freeze_llm: {args.freeze_llm}")
+
+        args.use_lora = 1 
 
         # LLM Freeze or LoRA
         llm_dim = llm.config.hidden_size
@@ -88,6 +102,7 @@ class FireRedAsrLlm(nn.Module):
                 llm = get_peft_model(llm, lora_config)
                 llm.print_trainable_parameters()
 
+        # After LoRA Config Get Embeds
         tokenizer = LlmTokenizerWrapper.build_llm_tokenizer(args.llm_dir)
         assert tokenizer.pad_token_id == tokenizer.convert_tokens_to_ids("<|endoftext|>")
         llm.config.pad_token_id = tokenizer.pad_token_id
@@ -120,22 +135,67 @@ class FireRedAsrLlm(nn.Module):
                    beam_size=1, decode_max_len=0, decode_min_len=0,
                    repetition_penalty=1.0, llm_length_penalty=1.0, temperature=1.0):
         # Step 3.1: Encode speech features
+        # torch.save({
+        #     'padded_feat': padded_feat.cpu(),
+        #     'feat_lengths': feat_lengths.cpu(),
+        # }, '/tmp/hf_encoder_input_debug.pt')
+
+        # print(f">>>>>> self.encoder: {self.encoder}")
+
         encoder_outs, enc_lengths, enc_mask = self.encoder(padded_feat, feat_lengths)
         # Step 3.2: Project speech features to LLM embedding space
+
+        # torch.save({
+        #     'encoder_outs': encoder_outs.cpu(),
+        #     'enc_lengths': enc_lengths.cpu(),
+        # }, '/tmp/hf_encoder_outs_debug.pt')
+
         speech_features, speech_lens = self.encoder_projector(encoder_outs, enc_lengths)
-        # Step 3.3: Get input embeddings
+
+        # torch.save({
+        #     'speech_features': speech_features.cpu(),
+        #     'speech_lens': speech_lens.cpu(),
+        # }, '/tmp/hf_encoder_projector_debug.pt')
+
+        # Step 3.3: Get input embeddings from LLM
         inputs_embeds = self.llm.get_input_embeddings()(padded_input_ids)
-        # Step 3.4: User custom function to merge input_ids with speech features
+        # Step 3.4: Merge input_ids with speech features
+
+        # torch.save({
+        #     'speech_features_tensor': speech_features.cpu(),
+        #     'inputs_embeds_tensor': inputs_embeds.cpu(),
+        #     'input_ids_tensor': padded_input_ids.cpu(),
+        #     'attention_mask_tensor': attention_mask.cpu(),
+        #     'speech_length': speech_lens.cpu(),
+        # }, '/tmp/hf_speech_features_debug.pt')
+
         inputs_embeds, attention_mask, _ = \
             self._merge_input_ids_with_speech_features(
                 speech_features.to(inputs_embeds.dtype), inputs_embeds, padded_input_ids, attention_mask,
                 speech_lens=speech_lens
             )
 
+        # Save inputs_embeds for testing
+        # torch.save({
+        #     'inputs_embeds': inputs_embeds.cpu(),
+        #     'attention_mask': attention_mask.cpu(),
+        #     'shape': inputs_embeds.shape,
+        # }, '/tmp/hf_merged_embeds.pt')
+        # print(f"Saved inputs_embeds with shape {inputs_embeds.shape} to /tmp/hf_merged_embeds.pt")
+
+        # # 加载从 ASR 模型保存的真实 embeddings
+        # saved_data = torch.load('/tmp/ray_vllm_merged_embeds.pt')
+        # dummy_prompt_embeds = saved_data['merged_embeds_original'].cuda()
+        # print(f"HF calculated inputs_embeds dtype: {inputs_embeds.dtype}")
+        # print(f"Ray calculated inputs_embeds dtype: {dummy_prompt_embeds.dtype}")
+        # if inputs_embeds.dtype != dummy_prompt_embeds.dtype:
+        #     dummy_prompt_embeds = dummy_prompt_embeds.to(inputs_embeds.dtype)
+        # inputs_embeds = dummy_prompt_embeds.unsqueeze(0)
+
         max_new_tokens = speech_features.size(1) if decode_max_len < 1 else decode_max_len
         max_new_tokens = max(1, max_new_tokens)
-
-        # Step 3.5: LLM Qwen2 Inference
+        
+        # Step 3.5: LLM Generate transcription
         generated_ids = self.llm.generate(
             inputs_embeds=inputs_embeds,
             max_new_tokens=max_new_tokens,

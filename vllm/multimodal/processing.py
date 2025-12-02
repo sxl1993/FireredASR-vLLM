@@ -679,7 +679,6 @@ def find_token_matches(
                 return []
 
             return [_PromptTargetIndexMatch(update, match_idx)]
-
         return [
             _PromptTargetTokenMatch(update, match)
             for match in iter_token_matches(prompt, target.token_ids)
@@ -1194,8 +1193,12 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
             tok_kwargs=tokenization_kwargs,
         )
         processed_data.update(passthrough_data)
-
-        prompt_ids, = processed_data.pop("input_ids").tolist()
+        # TODO: need tokenizer to encode the prompt text
+        # Handle case where HF processor doesn't return input_ids
+        if "input_ids" not in processed_data:
+            prompt_ids = []
+        else:
+            prompt_ids, = processed_data.pop("input_ids").tolist()
 
         is_update_applied = self._hf_processor_applies_updates(
             prompt_text=prompt_text,
@@ -1289,6 +1292,7 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
             to perform prompt updates if available; HF processor requires
             that the prompt corresponds to multi-modal items.
         """
+
         if isinstance(prompt, str):
             if enable_hf_prompt_update:
                 return self._apply_hf_processor_text_mm(
@@ -1369,6 +1373,8 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
         for modality, items_or_hashes in mm_cache_items_or_hashes.items():
             for item_or_hash in items_or_hashes:
                 if isinstance(item_or_hash, str):
+                    # print(f">>>>>>>>> get_item: {modality}, {mm_missing_next_idx[modality]}")
+                    # print(f"mm_missing_kwargs: {mm_missing_kwargs}")
                     kw_item = mm_missing_kwargs.get_item(
                         modality,
                         mm_missing_next_idx[modality],
@@ -1468,11 +1474,17 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
             enable_hf_prompt_update=False,
         )
 
+        # print(f"mm_missing_processed_data: {mm_missing_processed_data}")
+        # tmp = self._get_mm_fields_config(mm_missing_processed_data,
+        #                                hf_processor_mm_kwargs)
+        # print(f"_get_mm_fields_config: {tmp}")
         mm_missing_kwargs = MultiModalKwargs.from_hf_inputs(
             mm_missing_processed_data,
             self._get_mm_fields_config(mm_missing_processed_data,
                                        hf_processor_mm_kwargs),
         )
+
+        # print(f"mm_missing_kwargs: {mm_missing_kwargs}")
 
         mm_cache_items_merged = self._merge_mm_kwargs(
             cache,
@@ -1484,6 +1496,7 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
             item for cache_items in mm_cache_items_merged.values()
             for item in cache_items
         ])
+
 
         return prompt_ids, mm_kwargs, mm_hashes_to_return, is_update_applied
 
@@ -1519,7 +1532,6 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
         mm_item_counts: Mapping[str, int],
     ) -> tuple[list[int], str, Mapping[str, list[PlaceholderFeaturesInfo]]]:
         tokenizer = self.info.get_tokenizer()
-
         mm_token_matches = {
             modality: find_token_matches(token_ids, updates)
             for modality, updates in mm_prompt_updates.items()
@@ -1640,10 +1652,8 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
         )
         mm_prompt_updates = self._bind_and_group_updates(
             unbound_prompt_updates)
-
         mm_item_counts = mm_items.get_all_counts()
         self._validate_mm_kwargs(mm_kwargs, mm_item_counts)
-
         if is_update_applied:
             mm_placeholders = self._find_mm_placeholders(
                 mm_prompt_updates,
@@ -1715,7 +1725,6 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
             mm_kwargs=mm_kwargs,
             is_update_applied=is_update_applied,
         )
-
         mm_placeholder_ranges = {
             modality: [item.to_range() for item in placeholders]
             for modality, placeholders in mm_placeholders.items()

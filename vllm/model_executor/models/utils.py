@@ -418,23 +418,39 @@ def _merge_multimodal_embeddings(
     Note:
         This updates ``inputs_embeds`` in place.
     """
-    flattened = _flatten_embeddings(multimodal_embeddings)
-    try:
-        # This is equivalent to: inputs_embeds[is_multimodal] = flattened.
-        inputs_embeds.masked_scatter_(is_multimodal.unsqueeze(-1),
-                                      flattened.to(dtype=inputs_embeds.dtype))
-    except RuntimeError as e:
-        num_expected_tokens = is_multimodal.sum().item()
-        assert isinstance(num_expected_tokens, int)
+    if len(multimodal_embeddings) == 0:
+        return inputs_embeds
+    mm_embeds_flat = _flatten_embeddings(multimodal_embeddings)
+    input_dtype = inputs_embeds.dtype
+    num_expected_tokens = int(is_multimodal.sum().item())
 
-        if flattened.shape[0] != num_expected_tokens:
+    if mm_embeds_flat.shape[0] != num_expected_tokens:
+        expr = _embedding_count_expression(multimodal_embeddings)
+        raise ValueError(
+            f"Attempted to assign {expr} = {mm_embeds_flat.shape[0]} "
+            f"multimodal tokens to {num_expected_tokens} placeholders")
+
+    try:
+        # For debugging
+        # inputs_embeds[is_multimodal] = mm_embeds_flat.to(dtype=input_dtype)
+
+        # NOTE: This can avoid D2H sync (#22105), but fails to
+        # raise an error if is_multimodal.sum() < len(mm_embeds_flat)
+        inputs_embeds.masked_scatter_(is_multimodal.unsqueeze(-1),
+                                      mm_embeds_flat.to(dtype=input_dtype))
+    except RuntimeError as e:
+        num_actual_tokens = len(mm_embeds_flat)
+        num_expected_tokens = is_multimodal.sum().item()
+
+        if num_actual_tokens != num_expected_tokens:
             expr = _embedding_count_expression(multimodal_embeddings)
+
             raise ValueError(
-                f"Attempted to assign {expr} = {flattened.shape[0]} "
+                f"Attempted to assign {expr} = {num_actual_tokens} "
                 f"multimodal tokens to {num_expected_tokens} placeholders"
             ) from e
-        else:
-            raise ValueError("Error during masked scatter operation") from e
+
+        raise ValueError("Error during masked scatter operation") from e
 
     return inputs_embeds
 
@@ -507,20 +523,26 @@ def merge_multimodal_embeddings(
         This updates ``inputs_embeds`` in place.
     """
     if isinstance(placeholder_token_id, list):
-        placeholder_token_id = torch.tensor(placeholder_token_id,
-                                            device=input_ids.device)
-        return _merge_multimodal_embeddings(
-            inputs_embeds,
-            torch.isin(input_ids, placeholder_token_id),
-            multimodal_embeddings,
-        )
+        is_multimodal = isin_list(input_ids, placeholder_token_id)
+    else:
+        is_multimodal = (input_ids == placeholder_token_id)
 
     return _merge_multimodal_embeddings(
         inputs_embeds,
-        (input_ids == placeholder_token_id),
-        multimodal_embeddings,
+        multimodal_embeddings=multimodal_embeddings,
+        is_multimodal=is_multimodal,
     )
 
+def isin_list(
+    elements: torch.Tensor,
+    test_elements_list: list[int],
+) -> torch.Tensor:
+    test_elements = torch.tensor(
+        test_elements_list,
+        pin_memory=is_pin_memory_available(),
+    ).to(device=elements.device, non_blocking=True)
+
+    return torch.isin(elements, test_elements)
 
 class LayerFn(Protocol):
 

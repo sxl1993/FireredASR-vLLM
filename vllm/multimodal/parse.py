@@ -389,6 +389,12 @@ class MultiModalDataParser:
         data: ModalityData[AudioItem],
     ) -> Optional[ModalityDataItems[Any, Any]]:
         # also check single audio item with sampling rate
+
+        # <patchy> directly return path of audio file
+        if is_list_of(data, str):
+            return AudioProcessorItems(data)
+        if isinstance(data, str):
+            return AudioProcessorItems([data])
         if self._is_empty(data) or (isinstance(data, tuple)
                                     and self._is_empty(data[0])):
             return None

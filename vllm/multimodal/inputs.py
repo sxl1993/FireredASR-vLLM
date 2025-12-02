@@ -696,7 +696,6 @@ class MultiModalKwargs:
                 if len(elems) > 0:
                     elems_by_key[key] = elems
                     keys_by_modality[config.modality].add(key)
-
         items = list[MultiModalKwargsItem]()
         for modality, keys in keys_by_modality.items():
             elems_in_modality = {k: elems_by_key[k] for k in keys}
@@ -719,7 +718,9 @@ class MultiModalKwargs:
 
         items_by_modality = full_groupby(items, key=lambda x: x.modality)
         self._items_by_modality = dict(items_by_modality)
-
+        # print(f">>>>>>>>> items_by_modality: {items_by_modality}")
+        # print(f">>>>>>>>> items: {items}")
+        # print(f">>>>>>>>> self._items_by_modality: {self._items_by_modality}")
         self._data: Optional[Mapping[str, NestedTensors]] = None
 
     @property

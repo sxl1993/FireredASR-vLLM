@@ -45,6 +45,10 @@ class FireRedAsrConfig(PretrainedConfig):
         llm_dir: Optional[str] = None,
         freeze_llm: bool = False,
 
+        # Tokenizer configuration
+        tokenizer_path: Optional[str] = None,
+        tokenizer_padding_side: str = "left",  # "left" or "right"
+
         # Feature extractor configuration
         cmvn_path: Optional[str] = None,
         sampling_rate: int = 16000,
@@ -101,6 +105,10 @@ class FireRedAsrConfig(PretrainedConfig):
         self.llm_dir = llm_dir
         self.freeze_llm = freeze_llm
 
+        # Tokenizer settings
+        self.tokenizer_path = tokenizer_path
+        self.tokenizer_padding_side = tokenizer_padding_side
+
         # Feature extractor settings
         self.cmvn_path = cmvn_path
         self.sampling_rate = sampling_rate
@@ -123,6 +131,15 @@ class FireRedAsrConfig(PretrainedConfig):
         if self.model_dir and os.path.isdir(self.model_dir):
             self._resolve_paths()
     
+    def get_tokenizer_path(self):
+        """Get the tokenizer path to use for this model."""
+        # Use custom tokenizer_path if available, otherwise use llm_dir
+        if self.tokenizer_path and os.path.exists(self.tokenizer_path):
+            return self.tokenizer_path
+        elif self.llm_dir and os.path.exists(self.llm_dir):
+            return self.llm_dir
+        return None
+
     @classmethod
     def from_pretrained(cls, model_path_or_id, **kwargs):
         """
@@ -242,6 +259,12 @@ class FireRedAsrConfig(PretrainedConfig):
                         self.llm_dir = os.path.realpath(item_path)
                         break
 
+        # Set tokenizer path if not explicitly provided
+        if self.tokenizer_path is None:
+            tokenizer_path = os.path.join(self.model_dir, "modified_tokenizer")
+            if os.path.exists(tokenizer_path):
+                self.tokenizer_path = tokenizer_path
+
         # Validate paths exist
         self._validate_paths()
 
@@ -264,7 +287,7 @@ class FireRedAsrConfig(PretrainedConfig):
             import warnings
             warnings.warn(f"Missing model files: {', '.join(missing)}")
 
-    def get_text_config(self) -> "PretrainedConfig":
+    def get_text_config(self, **kwargs) -> "PretrainedConfig":
         """
         Get the text configuration.
 

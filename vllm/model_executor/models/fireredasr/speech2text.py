@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 
 import argparse
+import asyncio
 import glob
 import os
 import sys
 
-from fireredasr.models.fireredasr import FireRedAsr
+# Add parent directory to Python path to allow imports to work
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from .models.fireredasr import FireRedAsr
 
 
 parser = argparse.ArgumentParser()
@@ -36,7 +40,7 @@ parser.add_argument("--llm_length_penalty", type=float, default=0.0)
 parser.add_argument("--temperature", type=float, default=1.0)
 
 
-def main(args):
+async def main(args):
     wavs = get_wav_info(args)
     fout = open(args.output, "w") if args.output else None
 
@@ -44,6 +48,9 @@ def main(args):
 
     batch_uttid = []
     batch_wav_path = []
+    import time
+
+    start_time = time.perf_counter()
     for i, wav in enumerate(wavs):
         uttid, wav_path = wav
         batch_uttid.append(uttid)
@@ -69,14 +76,17 @@ def main(args):
             }
         )
 
-        for result in results:
-            print(result)
-            if fout is not None:
-                fout.write(f"{result['uttid']}\t{result['text']}\n")
+        # for result in results:
+        #     print(result)
+        #     if fout is not None:
+        #         fout.write(f"{result['uttid']}\t{result['text']}\n")
 
         batch_uttid = []
         batch_wav_path = []
 
+    end_time = time.perf_counter()
+    print(f"Time taken: {end_time - start_time:.2f} seconds")
+    print(f"Throughput: {len(wavs) / (end_time - start_time):.2f} qps")
 
 def get_wav_info(args):
     """
@@ -102,4 +112,4 @@ def get_wav_info(args):
 if __name__ == "__main__":
     args = parser.parse_args()
     print(args)
-    main(args)
+    asyncio.run(main(args))

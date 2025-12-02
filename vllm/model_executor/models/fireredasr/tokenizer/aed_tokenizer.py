@@ -3,7 +3,7 @@ import re
 
 import sentencepiece as spm
 
-from fireredasr.data.token_dict import TokenDict
+from ..data.token_dict import TokenDict
 
 
 class ChineseCharEnglishSpmTokenizer:

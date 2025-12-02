@@ -3,11 +3,11 @@ import time
 
 import torch
 
-from fireredasr.data.asr_feat import ASRFeatExtractor
-from fireredasr.models.fireredasr_aed import FireRedAsrAed
-from fireredasr.models.fireredasr_llm import FireRedAsrLlm
-from fireredasr.tokenizer.aed_tokenizer import ChineseCharEnglishSpmTokenizer
-from fireredasr.tokenizer.llm_tokenizer import LlmTokenizerWrapper
+from ..data.asr_feat import ASRFeatExtractor
+from .fireredasr_aed import FireRedAsrAed
+from .fireredasr_llm import FireRedAsrLlm
+from ..tokenizer.aed_tokenizer import ChineseCharEnglishSpmTokenizer
+from ..tokenizer.llm_tokenizer import LlmTokenizerWrapper
 
 
 class FireRedAsr:
@@ -77,6 +77,8 @@ class FireRedAsr:
 
         elif self.asr_type == "llm":
             # Step 2: Tokenize prompt and prepare inputs
+            # TODO: set the corresponding params in vLLM tokenizer
+            #       and bypass the tokenizer/detokenizer in Ray LLM
             input_ids, attention_mask, _, _ = \
                 LlmTokenizerWrapper.preprocess_texts(
                     origin_texts=[""]*feats.size(0), tokenizer=self.tokenizer,
@@ -86,7 +88,7 @@ class FireRedAsr:
                 attention_mask = attention_mask.cuda()
             start_time = time.time()
 
-            # Step 3: Inference
+            # Step 3: Inference (async call for vLLM)
             generated_ids = self.model.transcribe(
                 feats, lengths, input_ids, attention_mask,
                 args.get("beam_size", 1),
@@ -110,7 +112,14 @@ class FireRedAsr:
 
 
 def load_fireredasr_aed_model(model_path):
-    package = torch.load(model_path, map_location=lambda storage, loc: storage)
+    try:
+        package = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage,
+            weights_only=False,
+        )
+    except TypeError:
+        package = torch.load(model_path, map_location=lambda storage, loc: storage)
     print("model args:", package["args"])
     model = FireRedAsrAed.from_args(package["args"])
     model.load_state_dict(package["model_state_dict"], strict=True)
@@ -118,7 +127,14 @@ def load_fireredasr_aed_model(model_path):
 
 
 def load_firered_llm_model_and_tokenizer(model_path, encoder_path, llm_dir):
-    package = torch.load(model_path, map_location=lambda storage, loc: storage)
+    try:
+        package = torch.load(
+            model_path,
+            map_location=lambda storage, loc: storage,
+            weights_only=False,
+        )
+    except TypeError:
+        package = torch.load(model_path, map_location=lambda storage, loc: storage)
     package["args"].encoder_path = encoder_path
     package["args"].llm_dir = llm_dir
     print("model args:", package["args"])

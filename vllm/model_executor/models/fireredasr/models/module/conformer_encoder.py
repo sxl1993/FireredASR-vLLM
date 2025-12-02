@@ -46,6 +46,12 @@ class ConformerEncoder(nn.Module):
         原实现使用for循环在batch维度上迭代，在GPU上非常慢
         """
         N, T = padded_input.size()[:2]
+        # mask = torch.ones((N, T)).to(padded_input.device)
+        # for i in range(N):
+        #     mask[i, input_lengths[i]:] = 0
+        # mask = mask.unsqueeze(dim=1)
+        # return mask.to(torch.uint8)
+
         # 创建位置索引 [0, 1, 2, ..., T-1]，shape: (T,)
         positions = torch.arange(T, device=padded_input.device)
         # 扩展到batch维度，shape: (N, T)
@@ -139,6 +145,7 @@ class RelPositionalEncoding(torch.nn.Module):
         Tmax, T = self.pe.size(1), x.size(1)
         # 直接返回切片，无需clone和detach
         pos_emb = self.pe[:, Tmax // 2 - T + 1 : Tmax // 2 + T]
+        # pos_emb = self.pe[:, Tmax // 2 - T + 1 : Tmax // 2 + T].clone().detach()
         return pos_emb
 
 
@@ -200,15 +207,16 @@ class ConformerConvolution(nn.Module):
         out = self.pointwise_conv1(out)
         out = F.glu(out, dim=1)
         out = self.depthwise_conv(out)
-        
-        # 优化: 合并transpose操作，减少中间状态
-        # 原来: transpose -> norm -> transpose -> conv
-        # 现在: 一次transpose完成norm，然后继续卷积
+
         out = out.transpose(1, 2)  # (B, D, T) -> (B, T, D)
         out = self.batch_norm(out)
         out = self.swish(out)
         out = out.transpose(1, 2)  # (B, T, D) -> (B, D, T)
-        
+
+        # out = out.transpose(1, 2)
+        # out = self.swish(self.batch_norm(out))
+        # out = out.transpose(1, 2)
+
         out = self.dropout(self.pointwise_conv2(out))
         if mask is not None:
             out.masked_fill_(mask.ne(1), 0.0)
@@ -334,7 +342,6 @@ class RelPosMultiHeadAttention(EncoderMultiHeadAttention):
         n_batch_pos = pos_emb.size(0)
         p = self.linear_pos(pos_emb).view(n_batch_pos, -1, self.n_head, self.d_k)
         p = p.transpose(1, 2)
-
         q_with_bias_u = (q + self.pos_bias_u).transpose(1, 2)
         q_with_bias_v = (q + self.pos_bias_v).transpose(1, 2)
 

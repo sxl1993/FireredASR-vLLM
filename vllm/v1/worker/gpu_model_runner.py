@@ -1648,6 +1648,16 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         cudagraph_runtime_mode, batch_descriptor = \
             self.cudagraph_dispatcher.dispatch(batch_descriptor)
 
+
+        # if inputs_embeds is not None:
+        #     if inputs_embeds.shape[0] > 1:
+        #         print(f"vllm inputs_embeds.shape: {inputs_embeds.shape}")
+        #         print(f"vllm inputs_embeds: {inputs_embeds}")
+        #         tmp = torch.load('/tmp/hf_merged_embeds.pt')['inputs_embeds'][0]
+        #         print(f"hf inputs_embeds.shape: {tmp.shape}")
+        #         print(f"hf inputs_embeds: {tmp}")
+        #         inputs_embeds = tmp
+
         # Run the model.
         # Use persistent buffers for CUDA graphs.
         with set_forward_context(
