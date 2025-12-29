@@ -21,14 +21,14 @@ from vllm.platforms import current_platform
 logger.warning("Checking the availability of TensorRT-LLM ...")
 # <abs> TensorRT-LLM FP8 Support
 #
-try:
-    trtllm_version = importlib_version("tensorrt_llm")
-    logger.warning("TensorRT-LLM {trtllm_version} is available!",
-                   trtllm_version=trtllm_version)
-    IS_TRTLLM_AVAILABLE = True
-except Exception:
-    logger.exception("TensorRT-LLM is not installed!")
-    IS_TRTLLM_AVAILABLE = False
+# try:
+#     trtllm_version = importlib_version("tensorrt_llm")
+#     logger.warning("TensorRT-LLM {trtllm_version} is available!",
+#                    trtllm_version=trtllm_version)
+#     IS_TRTLLM_AVAILABLE = True
+# except Exception:
+#     logger.exception("TensorRT-LLM is not installed!")
+#     IS_TRTLLM_AVAILABLE = False
 
 # </abs>
 

@@ -291,6 +291,7 @@ class OpenAIServingChat(OpenAIServing):
                         lora_request=lora_request,
                     )
                 else:
+                    print(f"create_chat_completion engine_prompt: {engine_prompt}")
                     generator = self.engine_client.generate(
                         engine_prompt,
                         sampling_params,

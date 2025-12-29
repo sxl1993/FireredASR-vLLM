@@ -528,7 +528,8 @@ def get_vllm_version() -> str:
     # <abs> Versioning
     #
     # version = get_version(write_to="vllm/_version.py")
-    version = os.getenv("VLLM_VERSION")
+    # version = os.getenv("VLLM_VERSION")
+    version = "0.13"
 
     sep = "+" if "+" not in version else "."  # dev versions might contain +
 
@@ -676,13 +677,8 @@ if envs.VLLM_USE_PRECOMPILED:
     for pkg, files in patch.items():
         package_data.setdefault(pkg, []).extend(files)
 
-# <abs> Simplify build.
-#
-# if _no_device():
-#     ext_modules = []
-ext_modules = []
-
-# </abs>
+if _no_device():
+    ext_modules = []
 
 if not ext_modules:
     cmdclass = {}

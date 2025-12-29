@@ -10,14 +10,18 @@ import torch
 class ASRFeatExtractor:
     def __init__(self, kaldi_cmvn_file):
         self.cmvn = CMVN(kaldi_cmvn_file) if kaldi_cmvn_file != "" else None
-        self.fbank = KaldifeatFbank(num_mel_bins=80, frame_length=25,
-            frame_shift=10, dither=0.0)
+        self.fbank = KaldifeatFbank(num_mel_bins=80, frame_length=25, frame_shift=10, dither=0.0)
+        self.sampling_rate = 16000
 
     def __call__(self, wav_paths):
         feats = []
         durs = []
         for wav_path in wav_paths:
-            sample_rate, wav_np = kaldiio.load_mat(wav_path)
+            if isinstance(wav_path, np.ndarray):
+                wav_np = wav_path * 32768
+                sample_rate = self.sampling_rate
+            else:
+                sample_rate, wav_np = kaldiio.load_mat(wav_path)
             dur = wav_np.shape[0] / sample_rate
             fbank = self.fbank((sample_rate, wav_np))
             if self.cmvn is not None:
@@ -39,8 +43,6 @@ class ASRFeatExtractor:
         return pad
 
 
-
-
 class CMVN:
     def __init__(self, kaldi_cmvn_file):
         self.dim, self.means, self.inverse_std_variences = \
@@ -52,25 +54,41 @@ class CMVN:
         out = out * self.inverse_std_variences
         return out
 
+    # def read_kaldi_cmvn(self, kaldi_cmvn_file):
+    #     assert os.path.exists(kaldi_cmvn_file)
+    #     stats = kaldiio.load_mat(kaldi_cmvn_file)
+    #     assert stats.shape[0] == 2
+    #     dim = stats.shape[-1] - 1
+    #     count = stats[0, dim]
+    #     assert count >= 1
+    #     floor = 1e-20
+    #     means = []
+    #     inverse_std_variences = []
+    #     for d in range(dim):
+    #         mean = stats[0, d] / count
+    #         means.append(mean.item())
+    #         varience = (stats[1, d] / count) - mean*mean
+    #         if varience < floor:
+    #             varience = floor
+    #         istd = 1.0 / math.sqrt(varience)
+    #         inverse_std_variences.append(istd)
+    #     return dim, np.array(means), np.array(inverse_std_variences)
+
     def read_kaldi_cmvn(self, kaldi_cmvn_file):
-        assert os.path.exists(kaldi_cmvn_file)
+        assert os.path.exists(kaldi_cmvn_file), f"{kaldi_cmvn_file} not found"
         stats = kaldiio.load_mat(kaldi_cmvn_file)
-        assert stats.shape[0] == 2
+        assert stats.shape[0] == 2, f"Invalid CMVN stats shape: {stats.shape}"
         dim = stats.shape[-1] - 1
         count = stats[0, dim]
-        assert count >= 1
+        assert count >= 1, f"Invalid CMVN frame count: {count}"
         floor = 1e-20
-        means = []
-        inverse_std_variences = []
-        for d in range(dim):
-            mean = stats[0, d] / count
-            means.append(mean.item())
-            varience = (stats[1, d] / count) - mean*mean
-            if varience < floor:
-                varience = floor
-            istd = 1.0 / math.sqrt(varience)
-            inverse_std_variences.append(istd)
-        return dim, np.array(means), np.array(inverse_std_variences)
+        sums = stats[0, :dim]
+        square_sums = stats[1, :dim]
+        means = sums / count
+        variances = square_sums / count - means * means
+        variances = np.maximum(variances, floor)
+        inverse_std_variences = 1.0 / np.sqrt(variances)
+        return dim, means.astype(np.float32), inverse_std_variences.astype(np.float32)
 
 
 

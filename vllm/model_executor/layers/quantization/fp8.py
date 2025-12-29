@@ -50,8 +50,8 @@ from vllm.utils.flashinfer import has_flashinfer_moe
 
 # <abs> TensorRT-LLM FP8 Support
 #
-from vllm.model_executor.layers.quantization.utils.w8a8_utils import (  # isort: skip
-    IS_TRTLLM_AVAILABLE, TrtllmFp8BlockLinearOp, TrtllmFp8TensorLinearOp)
+# from vllm.model_executor.layers.quantization.utils.w8a8_utils import (  # isort: skip
+#     IS_TRTLLM_AVAILABLE, TrtllmFp8BlockLinearOp, TrtllmFp8TensorLinearOp)
 # </abs>
 
 if TYPE_CHECKING:

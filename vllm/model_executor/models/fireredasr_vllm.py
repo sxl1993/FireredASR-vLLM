@@ -7,6 +7,7 @@ which uses a speech encoder + projector + Qwen2 LLM architecture.
 import os
 from typing import Any, Iterable, List, Optional, Tuple, TypedDict, Union
 from collections.abc import Iterable, Mapping
+import numpy as np
 import torch
 import torch.nn as nn
 from transformers import PretrainedConfig, BatchFeature
@@ -25,12 +26,17 @@ from vllm.model_executor.models.utils import (
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
+    ModalityData,
     MultiModalDataDict,
     MultiModalFieldConfig,
     MultiModalKwargs,
+    ImageItem
 )
 from vllm.multimodal.parse import (
     MultiModalDataItems,
+    MultiModalDataParser,
+    ModalityDataItems,
+    DictEmbeddingItems
 )
 from vllm.multimodal.processing import (
     BaseMultiModalProcessor,
@@ -44,14 +50,9 @@ from vllm.sequence import IntermediateTensors
 from .interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP, SupportsLoRA
 
 # Import FireRedASR components
-try:
-    from .fireredasr.data.asr_feat import ASRFeatExtractor
-    from .fireredasr.models.fireredasr_aed import FireRedAsrAed
-    from .fireredasr.models.module.adapter import Adapter
-except ImportError:
-    ASRFeatExtractor = None
-    FireRedAsrAed = None
-    Adapter = None
+from .fireredasr.data.asr_feat import ASRFeatExtractor
+from .fireredasr.models.fireredasr_aed import FireRedAsrAed
+from .fireredasr.models.module.adapter import Adapter
 
 # Import FireRedASR config from transformers_utils
 from vllm.transformers_utils.configs.fireredasr import FireRedAsrConfig
@@ -59,11 +60,40 @@ from vllm.transformers_utils.configs.fireredasr import FireRedAsrConfig
 
 # ============= Data Structures =============
 
+def _fireredasr_field_config(hf_inputs: Mapping[str, torch.Tensor]):
+    audio_feature_lengths = hf_inputs.get("audio_feature_lengths",
+                                          torch.empty((0, )))
+
+    return dict(
+        input_audio_features=MultiModalFieldConfig.flat_from_sizes(
+            "audio", audio_feature_lengths, dim=1),
+        feature_attention_mask=MultiModalFieldConfig.batched("audio"),
+        audio_feature_lengths=MultiModalFieldConfig.batched("audio")
+    )
+
 class FireRedAsrInputs(TypedDict):
     """Type definition for FireRedASR audio inputs."""
     speech_features: torch.Tensor  # Shape: (batch, time, feat_dim)
     speech_lengths: torch.Tensor   # Shape: (batch,)
 
+
+class FireRedAsrMultiModalDataParser(MultiModalDataParser):
+
+    def _parse_audio_data(
+        self,
+        data: Union[dict[str, torch.Tensor], ModalityData[ImageItem]],
+    ) -> ModalityDataItems[Any, Any]:
+        if isinstance(data, dict):
+            return DictEmbeddingItems(
+                data,
+                modality="audio",
+                required_fields={
+                    "input_audio_features", "audio_feature_lengths"
+                },
+                fields_factory=_fireredasr_field_config,
+            )
+
+        return super()._parse_audio_data(data)
 
 # ============= Processing Components =============
 
@@ -84,6 +114,18 @@ class FireRedAsrProcessingInfo(BaseProcessingInfo):
         # (patchy) TODO: should be same with the one in FireRedAsrMultiModalProcessor._calc_speech_features_time_length
         max_audio_tokens = seq_len // hf_config.encoder_downsample_rate // 4
         return {"audio": max_audio_tokens}
+
+    def get_feature_extractor(
+        self,
+        *,
+        cmvn_path = None,
+        **kwargs: object,
+    ):
+        # hf_processor = self.get_hf_processor(sampling_rate=sampling_rate)
+        # feature_extractor = hf_processor.feature_extractor  # type: ignore
+        # assert isinstance(feature_extractor, WhisperFeatureExtractor)
+        feature_extractor = ASRFeatExtractor(cmvn_path)
+        return feature_extractor
 
 
 class FireRedAsrDummyInputsBuilder(BaseDummyInputsBuilder[FireRedAsrProcessingInfo]):
@@ -135,7 +177,8 @@ class FireRedAsrDummyInputsBuilder(BaseDummyInputsBuilder[FireRedAsrProcessingIn
         }
 
 
-class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessingInfo]):
+class FireRedAsrMultiModalProcessor(
+        BaseMultiModalProcessor[FireRedAsrProcessingInfo]):
     """Multimodal processor for FireRedASR."""
 
     def __init__(self, *args, **kwargs):
@@ -148,10 +191,17 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
                 "contains 'cmvn.ark' or provide cmvn_path explicitly."
             )
 
-        if not os.path.exists(cmvn_path):
-            raise FileNotFoundError(f"CMVN file not found at {cmvn_path}")
+        # if not os.path.exists(cmvn_path):
+        #     raise FileNotFoundError(f"CMVN file not found at {cmvn_path}")
 
         self.feat_extractor = ASRFeatExtractor(cmvn_path)
+
+    def _get_data_parser(self) -> MultiModalDataParser:
+        cmvn_path = self.info.get_hf_config().cmvn_path
+        if not os.path.exists(cmvn_path):
+            raise FileNotFoundError(f"CMVN file not found at {cmvn_path}")
+        feature_extractor = self.info.get_feature_extractor(cmvn_path=cmvn_path)
+        return FireRedAsrMultiModalDataParser(target_sr=feature_extractor.sampling_rate)
 
     def _hf_processor_applies_updates(
         self,
@@ -197,16 +247,25 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
             "speech_lengths": MultiModalFieldConfig.batched("audio"),
         }
 
-    def _check_audio_files(self, audio_data: list[str]) -> bool:
+    def _check_audio_files(self, audio_data) -> bool:
         """Check if the audio files exist."""
-        if audio_data is None or len(audio_data) == 0:
+        # print(f"sxl _check_audio_files audio_data: {audio_data}")
+        if audio_data is None or len(audio_data) == 0 or (isinstance(audio_data[0], str) and audio_data[0] == ""):
             return False
-        for audio_file in audio_data:
-            if audio_file == "":
-                return False
-            expanded_path = os.path.expanduser(audio_file)
-            if not os.path.exists(expanded_path):
-                return False
+        # for audio_file in audio_data:
+        #     print(f"sxl audio_file: {audio_file, type(audio_file)}")
+        #     if audio_file == "":
+        #         return False
+            # if isinstance(audio_file, tuple):
+            #     if len(audio_file) == 2 and isinstance(audio_file[0], np.ndarray):
+            #         return True
+            #     else:
+            #         return False
+            # elif isinstance(audio_file, np.ndarray):
+            #     return True
+            # expanded_path = os.path.expanduser(audio_file)
+            # if not os.path.exists(expanded_path):
+            #     return False
         return True
         
     
@@ -222,7 +281,6 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
             raise ImportError(
                 "FireRedASR is not installed. Please install it to use this model."
             )
-
         # directly use tokenizer to encode the prompt text
         tokenizer = self.info.get_tokenizer()
         # Get padding side from config, default to 'left'
@@ -247,14 +305,11 @@ class FireRedAsrMultiModalProcessor(BaseMultiModalProcessor[FireRedAsrProcessing
             })
         # Extract features
         # audio_data should be list of file paths or audio arrays
+        
         if isinstance(audio_data, list):
             feats, lengths, _ = self.feat_extractor(audio_data)
         else:
             feats, lengths, _ = self.feat_extractor([audio_data])
-
-        # # (patchy) DEBUG
-        # print(f"Processor input: feats shape: {feats.shape}")
-        # print(f"Processor input: lengths shape: {lengths.shape}")
 
         return BatchFeature({
             "speech_features": feats,
@@ -389,6 +444,7 @@ class FireRedAsrProjector(nn.Module):
             )
         
         self.adapter = Adapter(encoder_dim, llm_dim, downsample_rate)
+        # print(f"sxl adapter: {self.adapter}, encoder_dim={encoder_dim}, llm_dim: {llm_dim}")
     
     def forward(
         self,
@@ -452,6 +508,7 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
 
         # Extract configurations from vllm_config
         config = vllm_config.model_config.hf_config
+        # print(f"sxl config: {config}")
         self.vllm_config = vllm_config
         self.config = config
 
@@ -511,6 +568,7 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
             llm_dim=llm_dim,
             downsample_rate=config.encoder_downsample_rate,
         )
+        # print(f"sxl projector {self.projector}") # input: 5120, output: 
 
         self.projector.float().to(self.device)
         self.speech_encoder.float().to(self.device)
@@ -739,6 +797,7 @@ class FireRedAsrForConditionalGeneration(nn.Module, SupportsMultiModal, Supports
         # merge_multimodal_embeddings handles the merging by matching
         # placeholder token IDs in input_ids with the multimodal embeddings
         # TODO: Use merge_multimodal_embeddings_from_map instead or update _get_prompt_updates to return placeholder map
+        # print(f"sxl input_ids: {input_ids}, inputs_embeds: {inputs_embeds.shape}")
         inputs_embeds = merge_multimodal_embeddings(
             input_ids,
             inputs_embeds,
